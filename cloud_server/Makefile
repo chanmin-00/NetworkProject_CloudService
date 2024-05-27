@@ -1,0 +1,13 @@
+CC=gcc
+CFLAGS=-O2 -g -std=c99 -I.
+DEPS = server.h
+OBJ = server.o
+
+%.o: %.c $(DEPS)
+	$(CC) -c -o $@ $< $(CFLAGS)
+
+server: $(OBJ)
+	$(CC) -o $@ $^ $(CFLAGS)
+
+clean:
+	rm -f server $(OBJ)
