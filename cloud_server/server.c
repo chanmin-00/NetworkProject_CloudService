@@ -15,6 +15,7 @@ int main(int argc, char *argv[])
     server_addr.sin_port = htons(SERVER_PORT);
 
     server_socket = socket(AF_INET, SOCK_STREAM, 0);
+
     if (server_socket < 0)
     {
         perror("socket");
@@ -81,12 +82,36 @@ int cloud_function(int client_socket)
 int upload(int client_socket, Client client)
 {
     FILE *file;
+    password_tf password;
     char buffer[1024];
     int file_size = 0;
     int received = 0;
     int remain_data = 0;
 
-    file = fopen(client.filename, "w");
+    if (access(client.dir, F_OK) == -1)
+    {
+        if (create_directory(client) == -1)
+        {
+            return -1;
+        }
+    }
+    if (check_password(client) == -1)
+    {
+        strncpy(password.tf, "incorrect", sizeof("incorrect"));
+        write(1, "비밀번호가 일치하지 않습니다.\n", sizeof("비밀번호가 일치하지 않습니다.\n"));
+        send(client_socket, &password, sizeof(password), 0);
+        return -1;
+    }
+    else
+    {
+        strncpy(password.tf, "correct", sizeof("correct"));
+        write(1, "비밀번호가 일치합니다.\n", sizeof("비밀번호가 일치합니다.\n"));
+        send(client_socket, &password, sizeof(password), 0);
+    }
+
+    strcat(client.dir, "/");
+    strcat(client.dir, client.filename);
+    file = fopen(client.dir, "wb");
     if (file == NULL)
     {
         perror("fopen");
