@@ -42,7 +42,7 @@ int main(int argc, char *argv[])
 int client_cloud_function(int client_socket)
 {
     Client client;
-    password_tf password;
+    Message msg;
     char buffer[1024];
     int n;
 
@@ -77,9 +77,9 @@ int client_cloud_function(int client_socket)
 
             send(client_socket, &client, sizeof(client), 0);
 
-            recv(client_socket, &password, sizeof(password), 0);
+            recv(client_socket, &msg, sizeof(msg), 0);
 
-            if (strncmp(password.tf, "correct", 7) == 0)
+            if (strncmp(msg.message, "correct", 7) == 0)
             {
                 upload(client_socket, client);
             }

@@ -25,8 +25,8 @@ typedef struct
 
 typedef struct
 {
-    char tf[100];
-} password_tf;
+    char message[100];
+} Message;
 
 int exist_file(char *filename)
 {
