@@ -1,27 +1,18 @@
 #include "server.h"
+#include <pthread.h>
 
 #define SERVER_PORT 8080
 sem_t directory_semaphore;
 int upload(int socket, Client client);
 int download(int client_socket, Client client);
 int list(int client_socket, Client client);
-int cloud_function(int socket);
+void *cloud_function_thread(void *arg);
 
 int main(int argc, char *argv[])
 {
-    int server_socket, client_socket;
-    struct sockaddr_in server_addr, client_addr;
-    struct sigaction sa;
-
-    // SIGCHLD 핸들러 설정
-    sa.sa_handler = sigchld_handler;
-    sigemptyset(&sa.sa_mask);
-    sa.sa_flags = SA_RESTART;
-    if (sigaction(SIGCHLD, &sa, NULL) == -1)
-    {
-        perror("sigaction");
-        exit(1);
-    }
+    int server_socket;
+    struct sockaddr_in server_addr;
+    pthread_t tid;
 
     // 디렉토리 생성 세마포어 초기화
     if (sem_init(&directory_semaphore, 0, 1) == -1)
@@ -36,7 +27,6 @@ int main(int argc, char *argv[])
     server_addr.sin_port = htons(SERVER_PORT);
 
     server_socket = socket(AF_INET, SOCK_STREAM, 0);
-
     if (server_socket < 0)
     {
         perror("socket");
@@ -57,6 +47,8 @@ int main(int argc, char *argv[])
 
     while (1)
     {
+        int client_socket;
+        struct sockaddr_in client_addr;
         socklen_t client_addr_len = sizeof(client_addr);
         client_socket = accept(server_socket, (struct sockaddr *)&client_addr, &client_addr_len);
         if (client_socket < 0)
@@ -65,30 +57,33 @@ int main(int argc, char *argv[])
             return -1;
         }
 
-        if (fork() == 0)
+        // 클라이언트 소켓을 인자로 하는 새로운 스레드를 생성
+        if (pthread_create(&tid, NULL, cloud_function_thread, (void *)&client_socket) != 0)
         {
-            close(server_socket);
-            cloud_function(client_socket);
+            perror("pthread_create");
             close(client_socket);
-            exit(0);
         }
-        close(client_socket);
+        pthread_detach(tid);
     }
+
+    close(server_socket);
+    return 0;
 }
 
-int cloud_function(int client_socket)
+void *cloud_function_thread(void *arg)
 {
-
+    int client_socket = *((int *)arg);
     Client client;
-    int pid = getpid();
-    printf("%d : 프로세스 클라우드 서버 시작\n", pid);
+
     while (1)
     {
         if (recv(client_socket, &client, sizeof(client), 0) < 0)
         {
             perror("recv");
-            return -1;
+            close(client_socket);
+            pthread_exit(NULL);
         }
+
         if (!strcmp(client.command, "UPLOAD") || !strcmp(client.command, "upload"))
         {
             upload(client_socket, client);
@@ -103,9 +98,13 @@ int cloud_function(int client_socket)
         }
         else
         {
-            exit(0);
+            printf("종료\n");
+            close(client_socket);
+            pthread_exit(NULL);
         }
     }
+
+    return NULL;
 }
 
 int upload(int client_socket, Client client)
