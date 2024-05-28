@@ -44,3 +44,21 @@ void get_char(void)
     getchar();
     getchar();
 }
+
+void user_interface(Client *client)
+{
+    if (strcmp(client->command, "upload") == 0)
+    {
+        printf("업로드할 디렉토리 위치를 입력해주세요: ");
+        scanf("%s", client->dir);
+    }
+    else if (strcmp(client->command, "download") == 0)
+    {
+        printf("다운로드할 디렉토리 위치를 입력해주세요: ");
+        scanf("%s", client->dir);
+    }
+    printf("디렉토리 비밀번호를 입력해주세요: ");
+    scanf("%s", client->password);
+    printf("파일명을 입력해주세요: ");
+    scanf("%s", client->filename);
+}
