@@ -151,3 +151,56 @@ int upload(int client_socket, Client client)
 
     fclose(file);
 }
+
+int download(int client_socket, Client client)
+{
+    FILE *fp;
+    Message msg;
+    char buffer[1024];
+    int n;
+
+    if (access(client.dir, F_OK) == -1)
+    {
+        strncpy(msg.message, "not exist", sizeof("not exist"));
+        send(client_socket, &msg, sizeof(msg), 0);
+        return -1;
+    }
+
+    if (check_password(client) == -1)
+    {
+        strncpy(msg.message, "incorrect", sizeof("incorrect"));
+        send(client_socket, &msg, sizeof(msg), 0);
+        return -1;
+    }
+    else
+    {
+        strcat(client.dir, "/");
+        strcat(client.dir, client.filename);
+        fp = fopen(client.dir, "rb");
+        if (fp == NULL)
+        {
+            strncpy(msg.message, "not exist", sizeof("not exist"));
+            send(client_socket, &msg, sizeof(msg), 0);
+            return -1;
+        }
+        else
+        {
+            strncpy(msg.message, "correct", sizeof("correct"));
+            send(client_socket, &msg, sizeof(msg), 0);
+        }
+    }
+
+    while (1)
+    {
+        n = fread(buffer, 1, sizeof(buffer), fp);
+        if (n <= 0)
+        {
+            break;
+        }
+        send(client_socket, buffer, n, 0);
+    }
+
+    printf("%d : %s 다운로드 완료\n", getpid(), client.filename);
+
+    fclose(fp);
+}

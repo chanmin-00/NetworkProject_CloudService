@@ -36,7 +36,7 @@ void sigchld_handler(int s)
     while ((pid = waitpid(-1, NULL, WNOHANG)) > 0) // 모든 종료된 자식 프로세스에 대해
     {
         // 자식 프로세스의 pid와 종료 상태 출력
-        printf("자식 프로세스 %d 종료\n", pid);
+        printf("%d 종료 : 프로세스가 종료되었습니다\n", pid);
     }
 }
 
