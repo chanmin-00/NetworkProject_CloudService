@@ -18,5 +18,12 @@
 typedef struct
 {
     char command[10];
+    char dir[100];
+    char password[100];
     char filename[100];
 } Client;
+
+typedef struct
+{
+    char tf[100];
+} password_tf;

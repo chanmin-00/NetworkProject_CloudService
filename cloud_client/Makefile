@@ -1,6 +1,6 @@
 CC=gcc
 CFLAGS=-O2 -g -std=c99 -I.
-DEPS = client.h user.h unp.h
+DEPS = client.h
 OBJ = client.o
 
 %.o: %.c $(DEPS)

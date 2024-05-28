@@ -42,24 +42,46 @@ int main(int argc, char *argv[])
 int client_cloud_function(int client_socket)
 {
     Client client;
+    password_tf password;
     char buffer[1024];
     int n;
 
     while (1)
     {
+        // 터미널 clear
+        system("clear");
+
         printf("Enter command: ");
         scanf("%s", client.command);
         if (strcmp(client.command, "exit") == 0)
         {
             send(client_socket, &client, sizeof(client), 0);
+            // 버퍼 비우기
             break;
         }
         else if (strcmp(client.command, "upload") == 0)
         {
-            printf("Enter filename: ");
+            printf("업로드할 디렉토리 위치를 입력해주세요: ");
+            scanf("%s", client.dir);
+            printf("디렉토리 비밀번호를 입력해주세요. 없다면 새로운 비밀번호를 입력해주세요: ");
+            scanf("%s", client.password);
+            printf("파일명을 입력해주세요: ");
             scanf("%s", client.filename);
             send(client_socket, &client, sizeof(client), 0);
-            upload(client_socket, client);
+
+            recv(client_socket, &password, sizeof(password), 0);
+            printf("비밀번호 확인: %s\n", password.tf);
+            if (strncmp(password.tf, "correct", 7) == 0)
+            {
+                upload(client_socket, client);
+            }
+            else
+            {
+                printf("비밀번호가 틀렸습니다. 다시 입력해주세요.\n");
+            }
+            printf("업로드 완료\n");
+            getchar();
+            getchar();
         }
     }
 }
@@ -67,6 +89,7 @@ int client_cloud_function(int client_socket)
 int upload(int client_socket, Client client)
 {
     char buffer[1024];
+    char filename[100];
     int n;
     FILE *fp;
 
