@@ -27,3 +27,20 @@ typedef struct
 {
     char tf[100];
 } password_tf;
+
+int exist_file(char *filename)
+{
+    FILE *fp = fopen(filename, "r");
+    if (fp == NULL)
+    {
+        return -1;
+    }
+    fclose(fp);
+    return 0;
+}
+
+void get_char(void)
+{
+    getchar();
+    getchar();
+}

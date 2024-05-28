@@ -67,10 +67,18 @@ int client_cloud_function(int client_socket)
             scanf("%s", client.password);
             printf("파일명을 입력해주세요: ");
             scanf("%s", client.filename);
+
+            if (exist_file(client.filename) == -1)
+            {
+                printf("파일이 존재하지 않습니다.\n");
+                get_char();
+                continue;
+            }
+
             send(client_socket, &client, sizeof(client), 0);
 
             recv(client_socket, &password, sizeof(password), 0);
-            printf("비밀번호 확인: %s\n", password.tf);
+
             if (strncmp(password.tf, "correct", 7) == 0)
             {
                 upload(client_socket, client);
@@ -80,8 +88,7 @@ int client_cloud_function(int client_socket)
                 printf("비밀번호가 틀렸습니다. 다시 입력해주세요.\n");
             }
             printf("업로드 완료\n");
-            getchar();
-            getchar();
+            get_char();
         }
     }
 }
@@ -97,7 +104,7 @@ int upload(int client_socket, Client client)
     if (fp == NULL)
     {
         perror("fopen");
-        return -1;
+        exit(0);
     }
 
     while (1)
