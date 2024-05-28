@@ -2,6 +2,7 @@
 
 #define SERVER_PORT 8080
 int upload(int socket, Client client);
+int download(int client_socket, Client client);
 int cloud_function(int socket);
 
 int main(int argc, char *argv[])
@@ -83,6 +84,10 @@ int cloud_function(int client_socket)
         {
             upload(client_socket, client);
         }
+        else if (!strcmp(client.command, "DOWNLOAD") || !strcmp(client.command, "download"))
+        {
+            download(client_socket, client);
+        }
         else
         {
             exit(0);
@@ -93,7 +98,7 @@ int cloud_function(int client_socket)
 int upload(int client_socket, Client client)
 {
     FILE *file;
-    password_tf password;
+    Message msg;
     char buffer[1024];
     int file_size = 0;
     int received = 0;
@@ -108,14 +113,14 @@ int upload(int client_socket, Client client)
     }
     if (check_password(client) == -1)
     {
-        strncpy(password.tf, "incorrect", sizeof("incorrect"));
-        send(client_socket, &password, sizeof(password), 0);
+        strncpy(msg.message, "incorrect", sizeof("incorrect"));
+        send(client_socket, &msg, sizeof(msg), 0);
         return -1;
     }
     else
     {
-        strncpy(password.tf, "correct", sizeof("correct"));
-        send(client_socket, &password, sizeof(password), 0);
+        strncpy(msg.message, "correct", sizeof("correct"));
+        send(client_socket, &msg, sizeof(msg), 0);
     }
 
     strcat(client.dir, "/");
