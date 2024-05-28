@@ -2,6 +2,11 @@
 
 #define SERVER_PORT 8080
 
+int client_cloud_function(int client_socket);
+int upload(int client_socket, Client client);
+int download(int client_socket, Client client);
+int list(int client_socket, Client client);
+
 int main(int argc, char *argv[])
 {
     int client_socket;
@@ -110,6 +115,32 @@ int client_cloud_function(int client_socket)
             printf("Enter 키를 누르세요\n");
             get_char();
         }
+        else if (strcmp(client.command, "list") == 0 || strcmp(client.command, "LIST") == 0)
+        {
+            printf("디렉토리 위치를 입력해주세요: ");
+            scanf("%s", client.dir);
+            printf("디렉토리 비밀번호를 입력해주세요: ");
+            scanf("%s", client.password);
+
+            send(client_socket, &client, sizeof(client), 0);
+
+            recv(client_socket, &msg, sizeof(msg), 0);
+
+            if (strncmp(msg.message, "correct", 7) == 0)
+            {
+                list(client_socket, client);
+            }
+            else if (strcmp(msg.message, "incorrect") == 0)
+            {
+                printf("비밀번호가 틀렸습니다. 다시 입력해주세요.\n");
+            }
+            else
+            {
+                printf("디렉토리가 존재하지 않습니다.\n");
+            }
+            printf("Enter 키를 누르세요\n");
+            get_char();
+        }
     }
 }
 
@@ -174,6 +205,30 @@ int download(int client_socket, Client client)
     printf("%s 다운로드 완료\n", client.filename);
 
     fclose(fp);
+
+    return 0;
+}
+
+int list(int client_socket, Client client)
+{
+
+    char buffer[1024];
+    int received = 0;
+
+    // 서버로부터 파일 리스트를 받아와서 화면에 출력
+    while (1)
+    {
+        if ((received = recv(client_socket, buffer, 1024, 0)) < 0)
+        {
+            perror("recv");
+            return -1;
+        }
+        fwrite(buffer, 1, received, stdout);
+        if (received < 1024)
+        {
+            break;
+        }
+    }
 
     return 0;
 }
