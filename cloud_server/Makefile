@@ -1,5 +1,5 @@
 CC=gcc
-CFLAGS=-O2 -g -std=c99 -I.
+CFLAGS=-O2 -g -std=gnu99 -I.
 DEPS = server.h
 OBJ = server.o
 

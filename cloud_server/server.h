@@ -28,6 +28,18 @@ typedef struct
     char tf[100];
 } password_tf;
 
+void sigchld_handler(int s)
+{
+    // 종료되는 자식 프로세스의 pid 출력
+    pid_t pid;
+    int status;                                    // 자식 프로세스의 종료 상태
+    while ((pid = waitpid(-1, NULL, WNOHANG)) > 0) // 모든 종료된 자식 프로세스에 대해
+    {
+        // 자식 프로세스의 pid와 종료 상태 출력
+        printf("자식 프로세스 %d 종료\n", pid);
+    }
+}
+
 int create_directory(Client client)
 {
     char password_path[512];

@@ -8,6 +8,17 @@ int main(int argc, char *argv[])
 {
     int server_socket, client_socket;
     struct sockaddr_in server_addr, client_addr;
+    struct sigaction sa;
+
+    // SIGCHLD 핸들러 설정
+    sa.sa_handler = sigchld_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESTART;
+    if (sigaction(SIGCHLD, &sa, NULL) == -1)
+    {
+        perror("sigaction");
+        exit(1);
+    }
 
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
@@ -60,7 +71,7 @@ int cloud_function(int client_socket)
 
     Client client;
     int pid = getpid();
-
+    printf("%d : 프로세스 클라우드 서버 시작\n", pid);
     while (1)
     {
         if (recv(client_socket, &client, sizeof(client), 0) < 0)
@@ -98,14 +109,12 @@ int upload(int client_socket, Client client)
     if (check_password(client) == -1)
     {
         strncpy(password.tf, "incorrect", sizeof("incorrect"));
-        write(1, "비밀번호가 일치하지 않습니다.\n", sizeof("비밀번호가 일치하지 않습니다.\n"));
         send(client_socket, &password, sizeof(password), 0);
         return -1;
     }
     else
     {
         strncpy(password.tf, "correct", sizeof("correct"));
-        write(1, "비밀번호가 일치합니다.\n", sizeof("비밀번호가 일치합니다.\n"));
         send(client_socket, &password, sizeof(password), 0);
     }
 
@@ -132,6 +141,8 @@ int upload(int client_socket, Client client)
             break;
         }
     }
+
+    printf("%d : %s 업로드 완료\n", getpid(), client.filename);
 
     fclose(file);
 }
