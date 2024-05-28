@@ -14,6 +14,8 @@
 #include <pthread.h>
 #include <signal.h>
 #include <sys/wait.h>
+#include <sys/file.h>
+#include <semaphore.h>
 
 typedef struct
 {

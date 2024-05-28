@@ -1,6 +1,7 @@
 #include "server.h"
 
 #define SERVER_PORT 8080
+sem_t directory_semaphore;
 int upload(int socket, Client client);
 int download(int client_socket, Client client);
 int cloud_function(int socket);
@@ -19,6 +20,13 @@ int main(int argc, char *argv[])
     {
         perror("sigaction");
         exit(1);
+    }
+
+    // 디렉토리 생성 세마포어 초기화
+    if (sem_init(&directory_semaphore, 0, 1) == -1)
+    {
+        perror("sem_init");
+        return -1;
     }
 
     memset(&server_addr, 0, sizeof(server_addr));
@@ -104,21 +112,25 @@ int upload(int client_socket, Client client)
     int received = 0;
     int remain_data = 0;
 
+    sem_wait(&directory_semaphore);
     if (access(client.dir, F_OK) == -1)
     {
         if (create_directory(client) == -1)
         {
+            sem_post(&directory_semaphore);
             return -1;
         }
     }
     if (check_password(client) == -1)
     {
+        sem_post(&directory_semaphore);
         strncpy(msg.message, "incorrect", sizeof("incorrect"));
         send(client_socket, &msg, sizeof(msg), 0);
         return -1;
     }
     else
     {
+        sem_post(&directory_semaphore);
         strncpy(msg.message, "correct", sizeof("correct"));
         send(client_socket, &msg, sizeof(msg), 0);
     }
@@ -132,10 +144,12 @@ int upload(int client_socket, Client client)
         return -1;
     }
 
+    flock(fileno(file), LOCK_EX); // 파일 잠금 설정
     while (1)
     {
         if ((received = recv(client_socket, buffer, 1024, 0)) < 0)
         {
+            flock(fileno(file), LOCK_UN);
             perror("recv");
             return -1;
         }
@@ -146,6 +160,7 @@ int upload(int client_socket, Client client)
             break;
         }
     }
+    flock(fileno(file), LOCK_UN); // 파일 잠금 해제
 
     printf("%d : %s 업로드 완료\n", getpid(), client.filename);
 

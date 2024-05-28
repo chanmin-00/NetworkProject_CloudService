@@ -1,5 +1,6 @@
 CC=gcc
 CFLAGS=-O2 -g -std=gnu99 -I.
+LDFLAGS=-pthread
 DEPS = server.h
 OBJ = server.o
 
