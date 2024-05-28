@@ -4,6 +4,7 @@
 sem_t directory_semaphore;
 int upload(int socket, Client client);
 int download(int client_socket, Client client);
+int list(int client_socket, Client client);
 int cloud_function(int socket);
 
 int main(int argc, char *argv[])
@@ -95,6 +96,10 @@ int cloud_function(int client_socket)
         else if (!strcmp(client.command, "DOWNLOAD") || !strcmp(client.command, "download"))
         {
             download(client_socket, client);
+        }
+        else if (!strcmp(client.command, "LIST") || !strcmp(client.command, "list"))
+        {
+            list(client_socket, client);
         }
         else
         {
@@ -218,4 +223,51 @@ int download(int client_socket, Client client)
     printf("%d : %s 다운로드 완료\n", getpid(), client.filename);
 
     fclose(fp);
+}
+
+int list(int client_socket, Client client)
+{
+    DIR *dir;
+    struct dirent *entry; // 디렉토리 엔트리 구조체
+    Message msg;
+    char buffer[1024];
+    int n;
+
+    if (access(client.dir, F_OK) == -1)
+    {
+        strncpy(msg.message, "not exist", sizeof("not exist"));
+        send(client_socket, &msg, sizeof(msg), 0);
+        return -1;
+    }
+
+    if (check_password(client) == -1)
+    {
+        strncpy(msg.message, "incorrect", sizeof("incorrect"));
+        send(client_socket, &msg, sizeof(msg), 0);
+        return -1;
+    }
+    else
+    {
+        strncpy(msg.message, "correct", sizeof("correct"));
+        send(client_socket, &msg, sizeof(msg), 0);
+    }
+
+    dir = opendir(client.dir);
+    if (dir == NULL)
+    {
+        perror("opendir");
+        return -1;
+    }
+
+    while ((entry = readdir(dir)) != NULL) // 디렉토리 엔트리 읽기
+    {
+        if (entry->d_name[0] == '.') // 숨김 파일은 출력하지 않음
+        {
+            continue;
+        }
+        sprintf(buffer, "%s\n", entry->d_name); // 파일명 출력
+        send(client_socket, buffer, strlen(buffer), 0);
+    }
+
+    closedir(dir);
 }
