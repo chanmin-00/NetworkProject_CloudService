@@ -3,10 +3,6 @@
 
 #define SERVER_PORT 8080
 sem_t directory_semaphore;
-int upload(int socket, Client client);
-int download(int client_socket, Client client);
-int list(int client_socket, Client client);
-void *cloud_function_thread(void *arg);
 
 int main(int argc, char *argv[])
 {
@@ -20,6 +16,8 @@ int main(int argc, char *argv[])
         perror("sem_init");
         return -1;
     }
+
+    pthread_mutex_init(&mutx, NULL);
 
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
@@ -96,9 +94,13 @@ void *cloud_function_thread(void *arg)
         {
             list(client_socket, client);
         }
-        else
+        else if (!strcmp(client.command, "chat") || !strcmp(client.command, "CHAT"))
         {
-            printf("종료\n");
+            chat(client_socket, client);
+        }
+        else if (!strcmp(client.command, "exit"))
+        {
+            printf("서비스가 종료되었습니다.\n");
             close(client_socket);
             pthread_exit(NULL);
         }
@@ -269,4 +271,20 @@ int list(int client_socket, Client client)
     }
 
     closedir(dir);
+}
+
+void chat(int client_socket, Client client)
+{
+    pthread_t t_id;
+    Chat chat;
+    chat.clnt_sock = client_socket;
+    strcpy(chat.dir, client.dir);
+
+    pthread_mutex_lock(&mutx);
+    clnt_socks[clnt_cnt] = client_socket;
+    chat_clnt[clnt_cnt++] = chat;
+    pthread_mutex_unlock(&mutx);
+
+    pthread_create(&t_id, NULL, chat_client, (void *)&chat);
+    pthread_join(t_id, NULL);
 }

@@ -16,6 +16,8 @@
 #include <sys/wait.h>
 #include <sys/file.h>
 #include <semaphore.h>
+#define MAX_CLNT 50
+#define BUF_SIZE 1024
 
 typedef struct
 {
@@ -29,6 +31,31 @@ typedef struct
 {
     char message[100];
 } Message;
+
+typedef struct
+{
+    char chat_message[BUF_SIZE];
+    char name[20];
+} Chatting;
+
+typedef struct
+{
+    int clnt_sock;
+    char dir[100];
+} Chat;
+
+int clnt_cnt = 0;
+int clnt_socks[MAX_CLNT];
+pthread_mutex_t mutx = PTHREAD_MUTEX_INITIALIZER; // 뮤텍스 변수 초기화
+Chat chat_clnt[MAX_CLNT];
+
+int upload(int socket, Client client);
+int download(int client_socket, Client client);
+int list(int client_socket, Client client);
+void *cloud_function_thread(void *arg);
+void send_msg(Chatting *chatting, int len, int clnt_sock, char *dir);
+void *chat_client(void *arg);
+void chat(int client_socket, Client client);
 
 void sigchld_handler(int s)
 {
@@ -101,4 +128,66 @@ int check_password(Client client)
         return -1;
     }
     return 0;
+}
+
+void *chat_client(void *arg)
+{
+
+    Chat chat = *((Chat *)arg);
+
+    int clnt_sock = chat.clnt_sock;
+    char dir[100];
+    strcpy(dir, chat.dir);
+
+    Chatting chatting;
+    int str_len;
+
+    printf("채팅을 시작합니다.\n");
+
+    while ((str_len = read(clnt_sock, &chatting, sizeof(chatting))) != 0)
+    {
+        chatting.chat_message[str_len] = 0;
+        if (strcmp(chatting.chat_message, "STOP_CHAT") == 0)
+        {
+            printf("상대방이 채팅을 종료했습니다.\n");
+            write(clnt_sock, &chatting, sizeof(chatting));
+            pthread_exit(NULL);
+        }
+        printf("%s\n", chatting.name);
+        printf("%s\n", chatting.chat_message);
+        send_msg(&chatting, sizeof(chatting), clnt_sock, dir);
+        memset(chatting.chat_message, 0, sizeof(chatting.chat_message));
+    }
+
+    pthread_mutex_lock(&mutx);
+    for (int i = 0; i < clnt_cnt; i++)
+    {
+        if (clnt_sock == clnt_socks[i])
+        {
+            while (i++ < clnt_cnt - 1)
+            {
+                clnt_socks[i] = clnt_socks[i + 1];
+                chat_clnt[i] = chat_clnt[i + 1];
+            }
+            break;
+        }
+    }
+
+    clnt_cnt--;
+    pthread_mutex_unlock(&mutx);
+    return NULL;
+}
+
+void send_msg(Chatting *chatting, int len, int clnt_sock, char *dir)
+{
+    int i;
+    pthread_mutex_lock(&mutx);
+    for (i = 0; i < clnt_cnt; i++)
+    {
+        if (clnt_sock != clnt_socks[i])
+        {
+            write(clnt_socks[i], chatting, len);
+        }
+    }
+    pthread_mutex_unlock(&mutx);
 }
