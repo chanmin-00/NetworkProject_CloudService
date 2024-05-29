@@ -6,6 +6,13 @@ int client_cloud_function(int client_socket);
 int upload(int client_socket, Client client);
 int download(int client_socket, Client client);
 int list(int client_socket, Client client);
+void *recv_msg(void *arg);
+void *send_msg(void *arg);
+void chat(int client_socket);
+
+// 조건 변수와 종료 플래그
+pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
+pthread_mutex_t mutx = PTHREAD_MUTEX_INITIALIZER; // 뮤텍스 변수 초기화
 
 int main(int argc, char *argv[])
 {
@@ -26,7 +33,7 @@ int main(int argc, char *argv[])
         return -1;
     }
 
-    bzero(&server_addr, sizeof(server_addr));
+    memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
     server_addr.sin_addr.s_addr = inet_addr(argv[1]);
     server_addr.sin_port = htons(SERVER_PORT);
@@ -141,6 +148,28 @@ int client_cloud_function(int client_socket)
             printf("Enter 키를 누르세요\n");
             get_char();
         }
+        else if (strcmp(client.command, "chat") == 0 || strcmp(client.command, "CHAT") == 0)
+        {
+            printf("채팅을 시작합니다.\n");
+            printf("디렉토리 위치를 입력해주세요: ");
+            scanf("%s", client.dir);
+            printf("사용자 이름을 입력해주세요: ");
+            scanf("%s", name);
+            while (getchar() != '\n')
+                ;
+
+            send(client_socket, &client, sizeof(client), 0);
+            chat(client_socket);
+            printf("채팅을 종료합니다.\n");
+            printf("Enter 키를 누르세요\n");
+            get_char();
+        }
+        else
+        {
+            printf("잘못된 명령어입니다.\n");
+            printf("Enter 키를 누르세요\n");
+            get_char();
+        }
     }
 }
 
@@ -231,4 +260,15 @@ int list(int client_socket, Client client)
     }
 
     return 0;
+}
+
+void chat(int client_socket)
+{
+    pthread_t snd_thread, rcv_thread;
+    void *thread_return;
+
+    pthread_create(&snd_thread, NULL, send_msg, (void *)&client_socket);
+    pthread_create(&rcv_thread, NULL, recv_msg, (void *)&client_socket);
+    pthread_join(snd_thread, &thread_return);
+    pthread_join(rcv_thread, &thread_return);
 }
