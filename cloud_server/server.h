@@ -30,24 +30,24 @@ typedef struct
 typedef struct
 {
     char message[100];
-} Message;
+} Message; // 메시지 구조체, 오류/성공 메시지 전달
 
 typedef struct
 {
     char chat_message[BUF_SIZE];
     char name[20];
-} Chatting;
+} Chatting; // 채팅 구조체, 채팅 메시지 전달
 
 typedef struct
 {
     int clnt_sock;
-    char dir[100];
-} Chat;
+    char dir[100]; // 클라이언트 소켓, 디렉토리 경로(채팅 방에 해당하는 디렉토리 경로)
+} Chat_Setting;    // 채팅 설정 구조체, 채팅 설정 정보 전달
 
 int clnt_cnt = 0;
 int clnt_socks[MAX_CLNT];
 pthread_mutex_t mutx = PTHREAD_MUTEX_INITIALIZER; // 뮤텍스 변수 초기화
-Chat chat_clnt[MAX_CLNT];
+Chat_Setting chat_clnt[MAX_CLNT];                 // 채팅 설정 구조체 배열
 
 int upload(int socket, Client client);
 int download(int client_socket, Client client);
@@ -57,18 +57,9 @@ void send_msg(Chatting *chatting, int len, int clnt_sock, char *dir);
 void *chat_client(void *arg);
 void chat(int client_socket, Client client);
 
-void sigchld_handler(int s)
-{
-    // 종료되는 자식 프로세스의 pid 출력
-    pid_t pid;
-    int status;                                    // 자식 프로세스의 종료 상태
-    while ((pid = waitpid(-1, NULL, WNOHANG)) > 0) // 모든 종료된 자식 프로세스에 대해
-    {
-        // 자식 프로세스의 pid와 종료 상태 출력
-        printf("%d 종료 : 프로세스가 종료되었습니다\n", pid);
-    }
-}
-
+/*
+ * 디렉토리 생성 함수
+ */
 int create_directory(Client client)
 {
     char password_path[512];
@@ -103,6 +94,9 @@ int create_directory(Client client)
     return 0;
 }
 
+/*
+ * 비밀번호 확인 함수
+ */
 int check_password(Client client)
 {
     char password_path[512];
@@ -118,7 +112,11 @@ int check_password(Client client)
         perror("check_password : password.txt fopen() error");
         return -1;
     }
-    fscanf(fp, "%s", password);
+    if (fscanf(fp, "%s", password) == EOF)
+    {
+        printf("비밀번호가 일치하지 않습니다.\n");
+        return -1;
+    }
     fclose(fp);
 
     // 비밀번호 비교
@@ -130,14 +128,40 @@ int check_password(Client client)
     return 0;
 }
 
+/*
+ * 디렉토리 존재 여부, 비밀번호 일치 여부 확인 함수
+ */
+int check_list_chat(int client_socket, Client client)
+{
+    Message msg;
+    if (access(client.dir, F_OK) == -1) // 디렉토리가 존재하지 않으면
+    {
+        strncpy(msg.message, "not exist", sizeof("not exist"));
+        send(client_socket, &msg, sizeof(msg), 0);
+        return -1;
+    }
+    else if (check_password(client) == -1) // 비밀번호가 일치하지 않으면
+    {
+        strncpy(msg.message, "incorrect", sizeof("incorrect"));
+        send(client_socket, &msg, sizeof(msg), 0);
+        return -1;
+    }
+    else
+    {
+        strncpy(msg.message, "correct", sizeof("correct"));
+        send(client_socket, &msg, sizeof(msg), 0);
+    }
+    return 0;
+}
+
 void *chat_client(void *arg)
 {
 
-    Chat chat = *((Chat *)arg);
+    Chat_Setting chat_setting = *((Chat_Setting *)arg);
 
-    int clnt_sock = chat.clnt_sock;
-    char dir[100];
-    strcpy(dir, chat.dir);
+    int clnt_sock = chat_setting.clnt_sock; // 클라이언트 소켓
+    char dir[100];                          // 채팅 방 디렉토리 경로
+    strcpy(dir, chat_setting.dir);
 
     Chatting chatting;
     int str_len;
@@ -147,20 +171,17 @@ void *chat_client(void *arg)
     while ((str_len = read(clnt_sock, &chatting, sizeof(chatting))) != 0)
     {
         chatting.chat_message[str_len] = 0;
-        if (strcmp(chatting.chat_message, "STOP_CHAT") == 0)
+        if (strcmp(chatting.chat_message, "STOP_CHAT") == 0) // 채팅 종료
         {
-            printf("상대방이 채팅을 종료했습니다.\n");
-            write(clnt_sock, &chatting, sizeof(chatting));
-            pthread_exit(NULL);
+            send_msg(&chatting, sizeof(chatting), clnt_sock, dir);
+            break;
         }
-        printf("%s\n", chatting.name);
-        printf("%s\n", chatting.chat_message);
         send_msg(&chatting, sizeof(chatting), clnt_sock, dir);
-        memset(chatting.chat_message, 0, sizeof(chatting.chat_message));
     }
+    memset(chatting.chat_message, 0, sizeof(chatting.chat_message));
 
     pthread_mutex_lock(&mutx);
-    for (int i = 0; i < clnt_cnt; i++)
+    for (int i = 0; i < clnt_cnt; i++) // 채팅 클라이언트 배열에서 삭제
     {
         if (clnt_sock == clnt_socks[i])
         {
@@ -184,9 +205,22 @@ void send_msg(Chatting *chatting, int len, int clnt_sock, char *dir)
     pthread_mutex_lock(&mutx);
     for (i = 0; i < clnt_cnt; i++)
     {
-        if (clnt_sock != clnt_socks[i])
+        // 자기 자신을 제외하고, 같은 채팅 방에 있는 클라이언트에게만 메시지 전송
+        if (clnt_sock != clnt_socks[i] && strcmp(chat_clnt[i].dir, dir) == 0)
         {
-            write(clnt_socks[i], chatting, len);
+            if (write(clnt_socks[i], chatting, len) == -1)
+            {
+                perror("write() error");
+            }
+        }
+        // 자기 자신의 recv 스레드를 종료하기 위한 메시지 전송
+        if (clnt_sock == clnt_socks[i] && strcmp(chatting->chat_message, "STOP_CHAT") == 0)
+        {
+            strcpy(chatting->chat_message, "q");
+            if (write(clnt_sock, chatting, len) == -1) // 자기 자신에게 메시지 전송
+            {
+                perror("write() error");
+            }
         }
     }
     pthread_mutex_unlock(&mutx);

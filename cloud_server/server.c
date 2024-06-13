@@ -2,7 +2,7 @@
 #include <pthread.h>
 
 #define SERVER_PORT 8080
-sem_t directory_semaphore;
+sem_t semaphore; // 디렉토리 생성 세마포어
 
 int main(int argc, char *argv[])
 {
@@ -11,14 +11,17 @@ int main(int argc, char *argv[])
     pthread_t tid;
 
     // 디렉토리 생성 세마포어 초기화
-    if (sem_init(&directory_semaphore, 0, 1) == -1)
+    if (sem_init(&semaphore, 0, 1) == -1)
     {
         perror("sem_init");
         return -1;
     }
 
-    pthread_mutex_init(&mutx, NULL);
+    pthread_mutex_init(&mutx, NULL); // 뮤텍스 변수 초기화
 
+    /*
+     * 서버 소켓 생성
+     */
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
     server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
@@ -31,6 +34,9 @@ int main(int argc, char *argv[])
         return -1;
     }
 
+    /*
+     * 서버 소켓에 주소 할당
+     */
     if (bind(server_socket, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
     {
         perror("bind");
@@ -43,6 +49,9 @@ int main(int argc, char *argv[])
         return -1;
     }
 
+    /*
+     *클라이언트 요청을 받아들이고 스레드를 생성하여 처리
+     */
     while (1)
     {
         int client_socket;
@@ -61,6 +70,7 @@ int main(int argc, char *argv[])
             perror("pthread_create");
             close(client_socket);
         }
+        // 스레드를 분리하여 자원 회수
         pthread_detach(tid);
     }
 
@@ -84,19 +94,19 @@ void *cloud_function_thread(void *arg)
 
         if (!strcmp(client.command, "UPLOAD") || !strcmp(client.command, "upload"))
         {
-            upload(client_socket, client);
+            upload(client_socket, client); // 파일 업로드 함수 호출
         }
         else if (!strcmp(client.command, "DOWNLOAD") || !strcmp(client.command, "download"))
         {
-            download(client_socket, client);
+            download(client_socket, client); // 파일 다운로드 함수 호출
         }
         else if (!strcmp(client.command, "LIST") || !strcmp(client.command, "list"))
         {
-            list(client_socket, client);
+            list(client_socket, client); // 파일 목록 출력 함수 호출
         }
         else if (!strcmp(client.command, "chat") || !strcmp(client.command, "CHAT"))
         {
-            chat(client_socket, client);
+            chat(client_socket, client); // 채팅 함수 호출
         }
         else if (!strcmp(client.command, "exit"))
         {
@@ -104,8 +114,8 @@ void *cloud_function_thread(void *arg)
             close(client_socket);
             pthread_exit(NULL);
         }
+        memset(&client, 0, sizeof(client));
     }
-
     return NULL;
 }
 
@@ -115,47 +125,72 @@ int upload(int client_socket, Client client)
     Message msg;
     char buffer[1024];
     int file_size = 0;
+    int file_index = 0;
     int received = 0;
     int remain_data = 0;
+    char tmp_filename[256]; // 임시 저장
 
-    sem_wait(&directory_semaphore);
-    if (access(client.dir, F_OK) == -1)
+    sem_wait(&semaphore);               // 디렉토리 생성 세마포어 락
+    if (access(client.dir, F_OK) == -1) // 디렉토리가 존재하지 않으면 생성
     {
         if (create_directory(client) == -1)
         {
-            sem_post(&directory_semaphore);
+            sem_post(&semaphore);
             return -1;
         }
     }
     if (check_password(client) == -1)
     {
-        sem_post(&directory_semaphore);
+        sem_post(&semaphore);
         strncpy(msg.message, "incorrect", sizeof("incorrect"));
         send(client_socket, &msg, sizeof(msg), 0);
         return -1;
     }
     else
     {
-        sem_post(&directory_semaphore);
+        sem_post(&semaphore);
         strncpy(msg.message, "correct", sizeof("correct"));
         send(client_socket, &msg, sizeof(msg), 0);
     }
 
     strcat(client.dir, "/");
-    strcat(client.dir, client.filename);
-    file = fopen(client.dir, "wb");
+    strcat(client.dir, client.filename); // 파일명을 디렉토리 경로에 추가
+
+    sem_wait(&semaphore); // 파일 생성 세마포어 락
+    // 원래 파일 이름을 저장
+    char base_name[PATH_MAX];
+    strcpy(base_name, client.dir);
+
+    while (access(client.dir, F_OK) == 0) // 파일이 이미 존재하면
+    {
+        // base_filename에서 확장자를 찾아 분리
+        char *dot = strrchr(base_name, '.');
+        if (dot)
+        {
+            // base_filename과 확장자를 분리
+            size_t base_len = dot - base_name;
+            snprintf(tmp_filename, sizeof(tmp_filename), "%.*s_%d%s", (int)base_len, base_name, file_index, dot);
+        }
+        else
+        {
+            snprintf(tmp_filename, sizeof(tmp_filename), "%s_%d", base_name, file_index);
+        }
+        strcpy(client.dir, tmp_filename);
+        file_index++;
+    }
+    sem_post(&semaphore); // 파일 생성 세마포어 언락
+
+    file = fopen(client.dir, "wb"); // 파일 생성, 쓰기 모드, 바이너리 파일
     if (file == NULL)
     {
         perror("fopen");
         return -1;
     }
 
-    flock(fileno(file), LOCK_EX); // 파일 잠금 설정
     while (1)
     {
         if ((received = recv(client_socket, buffer, 1024, 0)) < 0)
         {
-            flock(fileno(file), LOCK_UN);
             perror("recv");
             return -1;
         }
@@ -163,12 +198,11 @@ int upload(int client_socket, Client client)
         fwrite(buffer, 1, received, file);
         if (received < 1024)
         {
-            break;
+            break; // 파일 전송 완료
         }
     }
-    flock(fileno(file), LOCK_UN); // 파일 잠금 해제
 
-    printf("%d : %s 업로드 완료\n", getpid(), client.filename);
+    printf("%s 업로드 완료\n", client.filename);
 
     fclose(file);
 }
@@ -180,14 +214,14 @@ int download(int client_socket, Client client)
     char buffer[1024];
     int n;
 
-    if (access(client.dir, F_OK) == -1)
+    if (access(client.dir, F_OK) == -1) // 디렉토리가 존재하지 않으면
     {
         strncpy(msg.message, "not exist", sizeof("not exist"));
-        send(client_socket, &msg, sizeof(msg), 0);
+        send(client_socket, &msg, sizeof(msg), 0); // 클라이언트에게 not exist 메시지 전송
         return -1;
     }
 
-    if (check_password(client) == -1)
+    if (check_password(client) == -1 || strcmp(client.filename, "password.txt") == 0) // 비밀번호가 일치하지 않으면, 파일명이 password.txt인 경우
     {
         strncpy(msg.message, "incorrect", sizeof("incorrect"));
         send(client_socket, &msg, sizeof(msg), 0);
@@ -197,7 +231,7 @@ int download(int client_socket, Client client)
     {
         strcat(client.dir, "/");
         strcat(client.dir, client.filename);
-        fp = fopen(client.dir, "rb");
+        fp = fopen(client.dir, "rb"); // 파일 열기, 읽기 모드, 바이너리 파일
         if (fp == NULL)
         {
             strncpy(msg.message, "not exist", sizeof("not exist"));
@@ -221,36 +255,22 @@ int download(int client_socket, Client client)
         send(client_socket, buffer, n, 0);
     }
 
-    printf("%d : %s 다운로드 완료\n", getpid(), client.filename);
+    printf("%s 다운로드 완료\n", client.filename);
 
     fclose(fp);
 }
 
 int list(int client_socket, Client client)
 {
-    DIR *dir;
+    DIR *dir;             // 디렉토리 구조체
     struct dirent *entry; // 디렉토리 엔트리 구조체
     Message msg;
     char buffer[1024];
     int n;
 
-    if (access(client.dir, F_OK) == -1)
+    if (check_list_chat(client_socket, client) == -1)
     {
-        strncpy(msg.message, "not exist", sizeof("not exist"));
-        send(client_socket, &msg, sizeof(msg), 0);
         return -1;
-    }
-
-    if (check_password(client) == -1)
-    {
-        strncpy(msg.message, "incorrect", sizeof("incorrect"));
-        send(client_socket, &msg, sizeof(msg), 0);
-        return -1;
-    }
-    else
-    {
-        strncpy(msg.message, "correct", sizeof("correct"));
-        send(client_socket, &msg, sizeof(msg), 0);
     }
 
     dir = opendir(client.dir);
@@ -275,16 +295,20 @@ int list(int client_socket, Client client)
 
 void chat(int client_socket, Client client)
 {
+    if (check_list_chat(client_socket, client) == -1)
+    {
+        return;
+    }
     pthread_t t_id;
-    Chat chat;
-    chat.clnt_sock = client_socket;
-    strcpy(chat.dir, client.dir);
+    Chat_Setting chat_setting;
+    chat_setting.clnt_sock = client_socket;
+    strcpy(chat_setting.dir, client.dir);
 
-    pthread_mutex_lock(&mutx);
+    pthread_mutex_lock(&mutx); // 뮤텍스 락
     clnt_socks[clnt_cnt] = client_socket;
-    chat_clnt[clnt_cnt++] = chat;
-    pthread_mutex_unlock(&mutx);
+    chat_clnt[clnt_cnt++] = chat_setting; // 클라이언트 소켓과 채팅 설정 구조체 저장
+    pthread_mutex_unlock(&mutx);          // 뮤텍스 언락
 
-    pthread_create(&t_id, NULL, chat_client, (void *)&chat);
-    pthread_join(t_id, NULL);
+    pthread_create(&t_id, NULL, chat_client, (void *)&chat_setting); // 채팅 클라이언트 스레드 생성
+    pthread_join(t_id, NULL);                                        // 채팅 클라이언트 스레드 종료 대기, 자원 회수
 }
