@@ -2,18 +2,6 @@
 
 #define SERVER_PORT 8080
 
-int client_cloud_function(int client_socket);
-int upload(int client_socket, Client client);
-int download(int client_socket, Client client);
-int list(int client_socket, Client client);
-void *recv_msg(void *arg);
-void *send_msg(void *arg);
-void chat(int client_socket);
-
-// 조건 변수와 종료 플래그
-pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
-pthread_mutex_t mutx = PTHREAD_MUTEX_INITIALIZER; // 뮤텍스 변수 초기화
-
 int main(int argc, char *argv[])
 {
     int client_socket;
@@ -38,6 +26,9 @@ int main(int argc, char *argv[])
     server_addr.sin_addr.s_addr = inet_addr(argv[1]);
     server_addr.sin_port = htons(SERVER_PORT);
 
+    /*
+     * 서버에 연결
+     */
     if (connect(client_socket, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
     {
         perror("connect");
@@ -46,8 +37,11 @@ int main(int argc, char *argv[])
 
     printf("Connected to server\n");
 
-    client_cloud_function(client_socket);
+    /*
+     * 클라우드 함수 실행
+     */
 
+    client_cloud_function(client_socket);
     return 0;
 }
 
@@ -61,30 +55,36 @@ int client_cloud_function(int client_socket)
     while (1)
     {
         // 터미널 clear
-        system("clear");
+        if (system("clear") == -1)
+        {
+            perror("system");
+            return -1;
+        }
 
         printf("Enter command: ");
-        scanf("%s", client.command);
+        if (scanf("%s", client.command) == EOF)
+        {
+            perror("scanf");
+            exit(1);
+        }
         if (strcmp(client.command, "exit") == 0)
         {
             send(client_socket, &client, sizeof(client), 0);
-            // 버퍼 비우기
             break;
         }
-        else if (strcmp(client.command, "upload") == 0 || strcmp(client.command, "UPLOAD") == 0)
+        else if (strcmp(client.command, "upload") == 0 || strcmp(client.command, "UPLOAD") == 0) // 업로드 함수 호출
         {
             user_interface(&client);
 
             if (exist_file(client.filename) == -1)
             {
                 printf("파일이 존재하지 않습니다.\n");
+                printf("Enter 키를 누르세요\n");
                 get_char();
                 continue;
             }
-
-            send(client_socket, &client, sizeof(client), 0);
-
-            recv(client_socket, &msg, sizeof(msg), 0);
+            send(client_socket, &client, sizeof(client), 0); // 서버로 명령어 전송
+            recv(client_socket, &msg, sizeof(msg), 0);       // 서버로부터 메시지 수신
 
             if (strncmp(msg.message, "correct", 7) == 0)
             {
@@ -98,13 +98,11 @@ int client_cloud_function(int client_socket)
             printf("Enter 키를 누르세요\n");
             get_char();
         }
-        else if (strcmp(client.command, "download") == 0 || strcmp(client.command, "DOWNLOAD") == 0)
+        else if (strcmp(client.command, "download") == 0 || strcmp(client.command, "DOWNLOAD") == 0) // 다운로드 함수 호출
         {
             user_interface(&client);
-
-            send(client_socket, &client, sizeof(client), 0);
-
-            recv(client_socket, &msg, sizeof(msg), 0);
+            send(client_socket, &client, sizeof(client), 0); // 서버로 명령어 전송
+            recv(client_socket, &msg, sizeof(msg), 0);       // 서버로부터 메시지 수신
 
             if (strncmp(msg.message, "correct", 7) == 0)
             {
@@ -122,15 +120,10 @@ int client_cloud_function(int client_socket)
             printf("Enter 키를 누르세요\n");
             get_char();
         }
-        else if (strcmp(client.command, "list") == 0 || strcmp(client.command, "LIST") == 0)
+        else if (strcmp(client.command, "list") == 0 || strcmp(client.command, "LIST") == 0) // 파일 목록 출력 함수 호출
         {
-            printf("디렉토리 위치를 입력해주세요: ");
-            scanf("%s", client.dir);
-            printf("디렉토리 비밀번호를 입력해주세요: ");
-            scanf("%s", client.password);
-
+            user_interface(&client);
             send(client_socket, &client, sizeof(client), 0);
-
             recv(client_socket, &msg, sizeof(msg), 0);
 
             if (strncmp(msg.message, "correct", 7) == 0)
@@ -148,20 +141,27 @@ int client_cloud_function(int client_socket)
             printf("Enter 키를 누르세요\n");
             get_char();
         }
-        else if (strcmp(client.command, "chat") == 0 || strcmp(client.command, "CHAT") == 0)
+        else if (strcmp(client.command, "chat") == 0 || strcmp(client.command, "CHAT") == 0) // 채팅 함수 호출
         {
-            printf("채팅을 시작합니다.\n");
-            printf("디렉토리 위치를 입력해주세요: ");
-            scanf("%s", client.dir);
-            printf("사용자 이름을 입력해주세요: ");
-            scanf("%s", name);
-            while (getchar() != '\n')
-                ;
-
+            user_interface(&client);
             send(client_socket, &client, sizeof(client), 0);
-            chat(client_socket);
-            printf("채팅을 종료합니다.\n");
-            printf("Enter 키를 누르세요\n");
+            recv(client_socket, &msg, sizeof(msg), 0);
+
+            if (strncmp(msg.message, "correct", 7) == 0)
+            {
+                printf("채팅을 시작합니다.\n");
+                chat(client_socket);
+                printf("채팅을 종료합니다.\n");
+            }
+            else if (strncmp(msg.message, "incorrect", 9) == 0)
+            {
+                printf("비밀번호가 틀렸습니다. 다시 입력해주세요.\n");
+            }
+            else
+            {
+                printf("디렉토리가 존재하지 않습니다.\n");
+            }
+            printf("Enter 키를 누르세요");
             get_char();
         }
         else
@@ -170,6 +170,7 @@ int client_cloud_function(int client_socket)
             printf("Enter 키를 누르세요\n");
             get_char();
         }
+        memset(&client, 0, sizeof(client));
     }
 }
 
@@ -196,6 +197,8 @@ int upload(int client_socket, Client client)
         }
         send(client_socket, buffer, n, 0);
     }
+
+    printf("%s 업로드 완료\n", client.filename);
 
     fclose(fp);
 
