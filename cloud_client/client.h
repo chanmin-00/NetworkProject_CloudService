@@ -14,8 +14,29 @@
 #include <pthread.h>
 #include <signal.h>
 #include <sys/wait.h>
+#include <openssl/crypto.h>
+#include <openssl/x509.h>
+#include <openssl/pem.h>
+#include <openssl/ssl.h>
+#include <openssl/err.h>
 
 #define BUF_SIZE 1024
+
+#define CHK_NULL(x)  \
+    if ((x) == NULL) \
+        exit(1);
+#define CHK_ERR(err, s) \
+    if ((err) == -1)    \
+    {                   \
+        perror(s);      \
+        exit(1);        \
+    }
+#define CHK_SSL(err)                 \
+    if ((err) == -1)                 \
+    {                                \
+        ERR_print_errors_fp(stderr); \
+        exit(2);                     \
+    }
 
 typedef struct
 {
@@ -38,13 +59,13 @@ typedef struct
 
 char name[20] = "[DEFAULT]";
 
-int client_cloud_function(int client_socket);
-int upload(int client_socket, Client client);
-int download(int client_socket, Client client);
-int list(int client_socket, Client client);
+int client_cloud_function(int client_socket, SSL *ssl);
+int upload(int client_socket, Client client, SSL *ssl);
+int download(int client_socket, Client client, SSL *ssl);
+int list(int client_socket, Client client, SSL *ssl);
 void *recv_msg(void *arg);
 void *send_msg(void *arg);
-void chat(int client_socket);
+void chat(SSL *ssl);
 
 // 조건 변수와 종료 플래그
 pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
@@ -157,7 +178,7 @@ void user_interface(Client *client)
 
 void *send_msg(void *arg) // 메시지 전송 함수
 {
-    int client_socket = *((int *)arg);
+    SSL *ssl = (SSL *)arg;
     Chatting chatting_recv;
     Chatting chatting_send;
 
@@ -171,21 +192,14 @@ void *send_msg(void *arg) // 메시지 전송 함수
         if (!strcmp(chatting_recv.chat_message, "q\n") || !strcmp(chatting_recv.chat_message, "Q\n"))
         {
             strcpy(chatting_send.chat_message, "STOP_CHAT");
-            if (write(client_socket, &chatting_send, sizeof(chatting_send)) == -1)
-            {
-                perror("write() error");
-            }
-
+            SSL_write(ssl, &chatting_send, sizeof(chatting_send));
             pthread_exit(NULL);
         }
 
         strcpy(chatting_send.chat_message, chatting_recv.chat_message);
         strcpy(chatting_send.name, name);
 
-        if (write(client_socket, &chatting_send, sizeof(chatting_send)) == -1)
-        {
-            perror("write() error");
-        }
+        SSL_write(ssl, &chatting_send, sizeof(chatting_send));
         memset(chatting_send.chat_message, 0, sizeof(chatting_send.chat_message));
         memset(chatting_recv.chat_message, 0, sizeof(chatting_recv.chat_message));
     }
@@ -194,27 +208,27 @@ void *send_msg(void *arg) // 메시지 전송 함수
 
 void *recv_msg(void *arg) // 메시지 수신 함수
 {
-    int client_socket = *((int *)arg);
+    SSL *ssl = (SSL *)arg;
     Chatting chatting_recv;
     int str_len;
 
     while (1)
     {
-        str_len = read(client_socket, &chatting_recv, sizeof(chatting_recv));
+        str_len = SSL_read(ssl, &chatting_recv, sizeof(chatting_recv));
 
         if (str_len == -1)
             return (void *)-1;
 
-        if (!strcmp(chatting_recv.chat_message, "STOP_CHAT"))
+        if (!strcmp(chatting_recv.chat_message, "STOP_CHAT")) // 상대방이 채팅을 종료할 경우
         {
             strcpy(chatting_recv.chat_message, "상대방이 채팅을 종료하였습니다.\n");
             fputs(chatting_recv.chat_message, stdout);
         }
-        else if (strcmp(chatting_recv.chat_message, "q") == 0)
+        else if (strcmp(chatting_recv.chat_message, "q") == 0) // 자신이 채팅을 종료할 경우
         {
             pthread_exit(NULL);
         }
-        else
+        else // 채팅 메시지 출력
         {
             chatting_recv.chat_message[str_len] = 0;
             fputs(chatting_recv.name, stdout);

@@ -1,5 +1,6 @@
 CC=gcc
 CFLAGS=-O2 -g -std=c99 -I.
+LDFLAGS = -lssl -lcrypto -pthread
 DEPS = client.h
 OBJ = client.o
 
@@ -7,7 +8,7 @@ OBJ = client.o
 	$(CC) -c -o $@ $< $(CFLAGS)
 
 client: $(OBJ)
-	$(CC) -o $@ $^ $(CFLAGS)
+	$(CC) -o $@ $^ $(LDFLAGS)
 
 clean:
 	rm -f client $(OBJ)
