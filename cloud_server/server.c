@@ -10,18 +10,65 @@ int main(int argc, char *argv[])
     struct sockaddr_in server_addr;
     pthread_t tid;
 
+    SSL_CTX *ctx;             // SSL 컨텍스트 구조체
+    SSL *ssl;                 // SSL 구조체
+    X509 *client_cert;        // 클라이언트 인증서 구조체
+    const SSL_METHOD *method; // SSL 메소드 구조체
+
+    // SSL 라이브러리 초기화
+    SSL_load_error_strings();
+    SSLeay_add_ssl_algorithms();
+    method = TLS_server_method();
+    ctx = SSL_CTX_new(method); // SSL 컨텍스트 구조체 생성
+
+    if (!ctx)
+    {
+        ERR_print_errors_fp(stderr);
+        return -1;
+    }
+
+    // 서버의 인증서 설정, 인증서 파일이 없으면 에러
+    if (SSL_CTX_use_certificate_file(ctx, "./server_auth/Server.crt", SSL_FILETYPE_PEM) <= 0)
+    {
+        ERR_print_errors_fp(stderr);
+        return -1;
+    }
+
+    // 서버의 개인키 설정, 개인키 파일이 없으면 에러
+    if (SSL_CTX_use_PrivateKey_file(ctx, "./server_auth/privkey-Server.pem", SSL_FILETYPE_PEM) <= 0)
+    {
+        ERR_print_errors_fp(stderr);
+        return -1;
+    }
+
+    // 개인키 사용 가능성 체크
+    if (!SSL_CTX_check_private_key(ctx))
+    {
+        fprintf(stderr, "개인키 불일치\n");
+        return -1;
+    }
+
+    // 사용할 CA의 인증서 설정, CA 인증서 파일이 없으면 에러
+    if (!SSL_CTX_load_verify_locations(ctx, "../CA/CA.crt", NULL))
+    {
+        ERR_print_errors_fp(stderr);
+        return -1;
+    }
+
+    // Client의 인증서를 검증하기 위한 설정, CA는 하나만 있다고 가정-> depth = 1
+    SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER | SSL_VERIFY_CLIENT_ONCE, verify_callback);
+    SSL_CTX_set_verify_depth(ctx, 1);
+
     // 디렉토리 생성 세마포어 초기화
     if (sem_init(&semaphore, 0, 1) == -1)
     {
         perror("sem_init");
         return -1;
     }
+    // 뮤텍스 변수 초기화
+    pthread_mutex_init(&mutx, NULL);
 
-    pthread_mutex_init(&mutx, NULL); // 뮤텍스 변수 초기화
-
-    /*
-     * 서버 소켓 생성
-     */
+    // 서버 소켓 생성
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
     server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
@@ -34,24 +81,19 @@ int main(int argc, char *argv[])
         return -1;
     }
 
-    /*
-     * 서버 소켓에 주소 할당
-     */
+    // 서버 소켓에 주소 할당
     if (bind(server_socket, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
     {
         perror("bind");
         return -1;
     }
-
     if (listen(server_socket, 5) < 0)
     {
         perror("listen");
         return -1;
     }
 
-    /*
-     *클라이언트 요청을 받아들이고 스레드를 생성하여 처리
-     */
+    // 클라이언트 요청을 받아들이고 스레드를 생성하여 처리
     while (1)
     {
         int client_socket;
@@ -64,13 +106,47 @@ int main(int argc, char *argv[])
             return -1;
         }
 
+        ssl = SSL_new(ctx); // SSL 구조체 생성
+        CHK_NULL(ssl);      // SSL 구조체 생성 실패 시 종료
+
+        SSL_set_fd(ssl, client_socket); // 클라이언트 소켓을 SSL 소켓으로 설정
+        if (SSL_accept(ssl) <= 0)
+        {
+            ERR_print_errors_fp(stderr);
+            close(client_socket);
+            SSL_free(ssl);
+            continue;
+        }
+
+        client_cert = SSL_get_peer_certificate(ssl); // 클라이언트 인증서
+        if (client_cert == NULL)
+        {
+            fprintf(stderr, "인증서가 없습니다.\n");
+            close(client_socket);
+            SSL_free(ssl);
+            continue;
+        }
+
+        if (SSL_get_verify_result(ssl) == X509_V_OK) // 클라이언트 인증서 검증
+        {
+            printf("인증서 검증 성공\n");
+            X509_free(client_cert);
+        }
+        else
+        {
+            printf("인증서 검증 실패\n");
+            close(client_socket);
+            SSL_free(ssl);
+            continue;
+        }
+
         // 클라이언트 소켓을 인자로 하는 새로운 스레드를 생성
-        if (pthread_create(&tid, NULL, cloud_function_thread, (void *)&client_socket) != 0)
+        if (pthread_create(&tid, NULL, cloud_function_thread, (void *)ssl) != 0)
         {
             perror("pthread_create");
             close(client_socket);
         }
-        // 스레드를 분리하여 자원 회수
+        // 스레드를 분리하여 기다리지 않음
         pthread_detach(tid);
     }
 
@@ -80,38 +156,39 @@ int main(int argc, char *argv[])
 
 void *cloud_function_thread(void *arg)
 {
-    int client_socket = *((int *)arg);
+    SSL *ssl = (SSL *)arg;
+    int client_socket = SSL_get_fd(ssl);
     Client client;
-
     while (1)
     {
-        if (recv(client_socket, &client, sizeof(client), 0) < 0)
+        if (SSL_read(ssl, &client, sizeof(client)) < 0)
         {
-            perror("recv");
+            perror("SSL_read");
             close(client_socket);
+            SSL_free(ssl);
             pthread_exit(NULL);
         }
-
         if (!strcmp(client.command, "UPLOAD") || !strcmp(client.command, "upload"))
         {
-            upload(client_socket, client); // 파일 업로드 함수 호출
+            upload(client_socket, client, ssl); // 파일 업로드 함수 호출
         }
         else if (!strcmp(client.command, "DOWNLOAD") || !strcmp(client.command, "download"))
         {
-            download(client_socket, client); // 파일 다운로드 함수 호출
+            download(client_socket, client, ssl); // 파일 다운로드 함수 호출
         }
         else if (!strcmp(client.command, "LIST") || !strcmp(client.command, "list"))
         {
-            list(client_socket, client); // 파일 목록 출력 함수 호출
+            list(client_socket, client, ssl); // 파일 목록 출력 함수 호출
         }
         else if (!strcmp(client.command, "chat") || !strcmp(client.command, "CHAT"))
         {
-            chat(client_socket, client); // 채팅 함수 호출
+            chat(client_socket, client, ssl); // 채팅 함수 호출
         }
         else if (!strcmp(client.command, "exit"))
         {
             printf("서비스가 종료되었습니다.\n");
             close(client_socket);
+            SSL_free(ssl);
             pthread_exit(NULL);
         }
         memset(&client, 0, sizeof(client));
@@ -119,7 +196,7 @@ void *cloud_function_thread(void *arg)
     return NULL;
 }
 
-int upload(int client_socket, Client client)
+int upload(int client_socket, Client client, SSL *ssl)
 {
     FILE *file;
     Message msg;
@@ -139,35 +216,35 @@ int upload(int client_socket, Client client)
             return -1;
         }
     }
-    if (check_password(client) == -1)
+    if (check_password(client) == -1) // 비밀번호가 일치하지 않으면
     {
         sem_post(&semaphore);
         strncpy(msg.message, "incorrect", sizeof("incorrect"));
-        send(client_socket, &msg, sizeof(msg), 0);
+        if (SSL_write(ssl, &msg, sizeof(msg)) < 0)
+        {
+            perror("SSL_write");
+        }
         return -1;
     }
     else
     {
         sem_post(&semaphore);
         strncpy(msg.message, "correct", sizeof("correct"));
-        send(client_socket, &msg, sizeof(msg), 0);
+        SSL_write(ssl, &msg, sizeof(msg));
     }
 
     strcat(client.dir, "/");
     strcat(client.dir, client.filename); // 파일명을 디렉토리 경로에 추가
 
     sem_wait(&semaphore); // 파일 생성 세마포어 락
-    // 원래 파일 이름을 저장
-    char base_name[PATH_MAX];
+    char base_name[256];
     strcpy(base_name, client.dir);
 
     while (access(client.dir, F_OK) == 0) // 파일이 이미 존재하면
     {
-        // base_filename에서 확장자를 찾아 분리
-        char *dot = strrchr(base_name, '.');
+        char *dot = strrchr(base_name, '.'); // base_filename에서 확장자를 찾아 분리
         if (dot)
         {
-            // base_filename과 확장자를 분리
             size_t base_len = dot - base_name;
             snprintf(tmp_filename, sizeof(tmp_filename), "%.*s_%d%s", (int)base_len, base_name, file_index, dot);
         }
@@ -189,9 +266,9 @@ int upload(int client_socket, Client client)
 
     while (1)
     {
-        if ((received = recv(client_socket, buffer, 1024, 0)) < 0)
+        if ((received = SSL_read(ssl, buffer, 1024)) < 0)
         {
-            perror("recv");
+            perror("SSL_read");
             return -1;
         }
         file_size += received;
@@ -201,13 +278,12 @@ int upload(int client_socket, Client client)
             break; // 파일 전송 완료
         }
     }
-
     printf("%s 업로드 완료\n", client.filename);
-
     fclose(file);
+    return 0;
 }
 
-int download(int client_socket, Client client)
+int download(int client_socket, Client client, SSL *ssl)
 {
     FILE *fp;
     Message msg;
@@ -217,14 +293,14 @@ int download(int client_socket, Client client)
     if (access(client.dir, F_OK) == -1) // 디렉토리가 존재하지 않으면
     {
         strncpy(msg.message, "not exist", sizeof("not exist"));
-        send(client_socket, &msg, sizeof(msg), 0); // 클라이언트에게 not exist 메시지 전송
+        SSL_write(ssl, &msg, sizeof(msg));
         return -1;
     }
 
     if (check_password(client) == -1 || strcmp(client.filename, "password.txt") == 0) // 비밀번호가 일치하지 않으면, 파일명이 password.txt인 경우
     {
         strncpy(msg.message, "incorrect", sizeof("incorrect"));
-        send(client_socket, &msg, sizeof(msg), 0);
+        SSL_write(ssl, &msg, sizeof(msg));
         return -1;
     }
     else
@@ -235,13 +311,13 @@ int download(int client_socket, Client client)
         if (fp == NULL)
         {
             strncpy(msg.message, "not exist", sizeof("not exist"));
-            send(client_socket, &msg, sizeof(msg), 0);
+            SSL_write(ssl, &msg, sizeof(msg));
             return -1;
         }
         else
         {
             strncpy(msg.message, "correct", sizeof("correct"));
-            send(client_socket, &msg, sizeof(msg), 0);
+            SSL_write(ssl, &msg, sizeof(msg));
         }
     }
 
@@ -252,23 +328,27 @@ int download(int client_socket, Client client)
         {
             break;
         }
-        send(client_socket, buffer, n, 0);
+        if (SSL_write(ssl, buffer, n) < 0)
+        {
+            perror("SSL_write");
+            return -1;
+        }
     }
 
     printf("%s 다운로드 완료\n", client.filename);
 
     fclose(fp);
+    return 0;
 }
 
-int list(int client_socket, Client client)
+int list(int client_socket, Client client, SSL *ssl)
 {
     DIR *dir;             // 디렉토리 구조체
     struct dirent *entry; // 디렉토리 엔트리 구조체
     Message msg;
     char buffer[1024];
-    int n;
 
-    if (check_list_chat(client_socket, client) == -1)
+    if (check_list_chat(client_socket, client, ssl) == -1)
     {
         return -1;
     }
@@ -287,22 +367,26 @@ int list(int client_socket, Client client)
             continue;
         }
         sprintf(buffer, "%s\n", entry->d_name); // 파일명 출력
-        send(client_socket, buffer, strlen(buffer), 0);
+        SSL_write(ssl, buffer, strlen(buffer));
     }
+    strcpy(buffer, "EOF");
+    SSL_write(ssl, buffer, strlen(buffer)); // 파일 목록 출력 완료
+    printf("파일 목록 출력 완료\n");
 
     closedir(dir);
 }
 
-void chat(int client_socket, Client client)
+void chat(int client_socket, Client client, SSL *ssl)
 {
-    if (check_list_chat(client_socket, client) == -1)
+    if (check_list_chat(client_socket, client, ssl) == -1)
     {
         return;
     }
     pthread_t t_id;
-    Chat_Setting chat_setting;
-    chat_setting.clnt_sock = client_socket;
-    strcpy(chat_setting.dir, client.dir);
+    Chat_Setting chat_setting;              // 채팅 설정 구조체
+    chat_setting.clnt_sock = client_socket; // 클라이언트 소켓
+    chat_setting.ssl = ssl;                 // SSL 구조체
+    strcpy(chat_setting.dir, client.dir);   // 채팅 방 디렉토리 경로
 
     pthread_mutex_lock(&mutx); // 뮤텍스 락
     clnt_socks[clnt_cnt] = client_socket;

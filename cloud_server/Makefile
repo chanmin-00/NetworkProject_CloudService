@@ -1,6 +1,6 @@
-CC=gcc
-CFLAGS=-O2 -g -std=gnu99 -I.
-LDFLAGS=-pthread
+CC = gcc
+CFLAGS = -O2 -g -std=gnu99 -I.
+LDFLAGS = -lssl -lcrypto -pthread
 DEPS = server.h
 OBJ = server.o
 
@@ -8,7 +8,7 @@ OBJ = server.o
 	$(CC) -c -o $@ $< $(CFLAGS)
 
 server: $(OBJ)
-	$(CC) -o $@ $^ $(CFLAGS)
+	$(CC) -o $@ $^ $(LDFLAGS) 
 
 clean:
 	rm -f server $(OBJ)

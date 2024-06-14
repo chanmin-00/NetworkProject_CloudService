@@ -16,8 +16,29 @@
 #include <sys/wait.h>
 #include <sys/file.h>
 #include <semaphore.h>
+#include <openssl/crypto.h>
+#include <openssl/x509.h>
+#include <openssl/pem.h>
+#include <openssl/ssl.h>
+#include <openssl/err.h>
 #define MAX_CLNT 50
 #define BUF_SIZE 1024
+
+#define CHK_NULL(x)  \
+    if ((x) == NULL) \
+        exit(1);
+#define CHK_ERR(err, s) \
+    if ((err) == -1)    \
+    {                   \
+        perror(s);      \
+        exit(1);        \
+    }
+#define CHK_SSL(err)                 \
+    if ((err) == -1)                 \
+    {                                \
+        ERR_print_errors_fp(stderr); \
+        exit(2);                     \
+    }
 
 typedef struct
 {
@@ -25,7 +46,7 @@ typedef struct
     char dir[100];
     char password[100];
     char filename[100];
-} Client;
+} Client; // 클라이언트 구조체, 클라이언트 명령어, 디렉토리 경로, 비밀번호, 파일 이름 전달
 
 typedef struct
 {
@@ -42,20 +63,48 @@ typedef struct
 {
     int clnt_sock;
     char dir[100]; // 클라이언트 소켓, 디렉토리 경로(채팅 방에 해당하는 디렉토리 경로)
-} Chat_Setting;    // 채팅 설정 구조체, 채팅 설정 정보 전달
+    SSL *ssl;
+} Chat_Setting; // 채팅 설정 구조체, 채팅 설정 정보 전달
 
 int clnt_cnt = 0;
-int clnt_socks[MAX_CLNT];
+int clnt_socks[MAX_CLNT];                         // 클라이언트 소켓 배열
 pthread_mutex_t mutx = PTHREAD_MUTEX_INITIALIZER; // 뮤텍스 변수 초기화
 Chat_Setting chat_clnt[MAX_CLNT];                 // 채팅 설정 구조체 배열
 
-int upload(int socket, Client client);
-int download(int client_socket, Client client);
-int list(int client_socket, Client client);
+int upload(int socket, Client client, SSL *ssl);
+int download(int client_socket, Client client, SSL *ssl);
+int list(int client_socket, Client client, SSL *ssl);
+void chat(int client_socket, Client client, SSL *ssl);
 void *cloud_function_thread(void *arg);
-void send_msg(Chatting *chatting, int len, int clnt_sock, char *dir);
+void send_msg(Chatting *chatting, int len, int clnt_sock, char *dir, SSL *ssl);
 void *chat_client(void *arg);
-void chat(int client_socket, Client client);
+
+/*
+ * verify_callback 함수, 인증서 검증 콜백 함수
+ */
+static int verify_callback(int preverify_ok, X509_STORE_CTX *ctx)
+{
+
+    char *str;
+    X509 *cert = X509_STORE_CTX_get_current_cert(ctx); // 현재 인증서
+
+    if (cert)
+    {
+        printf("Cert depth %d\n", X509_STORE_CTX_get_error_depth(ctx)); // 인증서 깊이
+
+        str = X509_NAME_oneline(X509_get_subject_name(cert), 0, 0); // 인증서의 subject
+        CHK_NULL(str);
+        printf("\t subject : %s\n", str);
+        OPENSSL_free(str);
+
+        str = X509_NAME_oneline(X509_get_issuer_name(cert), 0, 0); // 인증서의 issuer
+        CHK_NULL(str);
+        printf("\t issuer : %s\n", str);
+        OPENSSL_free(str);
+    }
+
+    return preverify_ok;
+}
 
 /*
  * 디렉토리 생성 함수
@@ -129,59 +178,61 @@ int check_password(Client client)
 }
 
 /*
- * 디렉토리 존재 여부, 비밀번호 일치 여부 확인 함수
+ * 디렉토리 존재 여부 및 비밀번호 일치 여부 확인 함수
  */
-int check_list_chat(int client_socket, Client client)
+int check_list_chat(int client_socket, Client client, SSL *ssl)
 {
     Message msg;
     if (access(client.dir, F_OK) == -1) // 디렉토리가 존재하지 않으면
     {
         strncpy(msg.message, "not exist", sizeof("not exist"));
-        send(client_socket, &msg, sizeof(msg), 0);
+        SSL_write(ssl, &msg, sizeof(msg));
         return -1;
     }
     else if (check_password(client) == -1) // 비밀번호가 일치하지 않으면
     {
         strncpy(msg.message, "incorrect", sizeof("incorrect"));
-        send(client_socket, &msg, sizeof(msg), 0);
+        SSL_write(ssl, &msg, sizeof(msg));
         return -1;
     }
     else
     {
         strncpy(msg.message, "correct", sizeof("correct"));
-        send(client_socket, &msg, sizeof(msg), 0);
+        SSL_write(ssl, &msg, sizeof(msg));
     }
     return 0;
 }
 
+/*
+ * 채팅 방 생성 함수, 같은 디렉토리를 공유하는 사람들끼리 파일 작업과 같은 내용 채팅을 가능하게 함
+ */
 void *chat_client(void *arg)
 {
-
     Chat_Setting chat_setting = *((Chat_Setting *)arg);
 
     int clnt_sock = chat_setting.clnt_sock; // 클라이언트 소켓
+    SSL *ssl = chat_setting.ssl;            // SSL 구조체
     char dir[100];                          // 채팅 방 디렉토리 경로
     strcpy(dir, chat_setting.dir);
 
-    Chatting chatting;
+    Chatting chatting; // 채팅 구조체
     int str_len;
 
     printf("채팅을 시작합니다.\n");
-
-    while ((str_len = read(clnt_sock, &chatting, sizeof(chatting))) != 0)
+    while ((str_len = SSL_read(ssl, &chatting, sizeof(chatting))) != 0)
     {
         chatting.chat_message[str_len] = 0;
         if (strcmp(chatting.chat_message, "STOP_CHAT") == 0) // 채팅 종료
         {
-            send_msg(&chatting, sizeof(chatting), clnt_sock, dir);
+            send_msg(&chatting, sizeof(chatting), clnt_sock, dir, ssl);
             break;
         }
-        send_msg(&chatting, sizeof(chatting), clnt_sock, dir);
+        send_msg(&chatting, sizeof(chatting), clnt_sock, dir, ssl);
     }
-    memset(chatting.chat_message, 0, sizeof(chatting.chat_message));
+    memset(chatting.chat_message, 0, sizeof(chatting.chat_message)); // 채팅 메시지 초기화
 
-    pthread_mutex_lock(&mutx);
-    for (int i = 0; i < clnt_cnt; i++) // 채팅 클라이언트 배열에서 삭제
+    pthread_mutex_lock(&mutx);         // 뮤텍스 락
+    for (int i = 0; i < clnt_cnt; i++) // 채팅 클라이언트 배열에서 삭제, 채팅을 종료한 경우
     {
         if (clnt_sock == clnt_socks[i])
         {
@@ -193,35 +244,31 @@ void *chat_client(void *arg)
             break;
         }
     }
-
     clnt_cnt--;
-    pthread_mutex_unlock(&mutx);
+    pthread_mutex_unlock(&mutx); // 뮤텍스 언락
     return NULL;
 }
 
-void send_msg(Chatting *chatting, int len, int clnt_sock, char *dir)
+/*
+ * 클라이언트에게 메시지 전송 함수
+ */
+void send_msg(Chatting *chatting, int len, int clnt_sock, char *dir, SSL *ssl)
 {
     int i;
-    pthread_mutex_lock(&mutx);
+    pthread_mutex_lock(&mutx); // 뮤텍스 락
     for (i = 0; i < clnt_cnt; i++)
     {
         // 자기 자신을 제외하고, 같은 채팅 방에 있는 클라이언트에게만 메시지 전송
         if (clnt_sock != clnt_socks[i] && strcmp(chat_clnt[i].dir, dir) == 0)
         {
-            if (write(clnt_socks[i], chatting, len) == -1)
-            {
-                perror("write() error");
-            }
+            SSL_write(chat_clnt[i].ssl, chatting, len);
         }
-        // 자기 자신의 recv 스레드를 종료하기 위한 메시지 전송
+        // STOP_CHAT 메시지를 보낸 경우, 자기 자신의 recv 스레드를 종료하기 위한 메시지 전송
         if (clnt_sock == clnt_socks[i] && strcmp(chatting->chat_message, "STOP_CHAT") == 0)
         {
             strcpy(chatting->chat_message, "q");
-            if (write(clnt_sock, chatting, len) == -1) // 자기 자신에게 메시지 전송
-            {
-                perror("write() error");
-            }
+            SSL_write(chat_clnt[i].ssl, chatting, len);
         }
     }
-    pthread_mutex_unlock(&mutx);
+    pthread_mutex_unlock(&mutx); // 뮤텍스 언락
 }
