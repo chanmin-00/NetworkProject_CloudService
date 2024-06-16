@@ -1,4 +1,4 @@
-# NetworkProject_CloudService
+# NetworkProject_CloudService 🌐
 2024학년도 1학기 네트워크 프로그래밍 수업에서 텀프로젝트로 진행했던 프로젝트 구현물입니다.
 
 ## 사용한 기술
